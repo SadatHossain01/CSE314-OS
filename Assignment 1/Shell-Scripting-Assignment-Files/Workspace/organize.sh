@@ -23,9 +23,9 @@ visit()
 evaluate()
 {   
     # first parameter is language, C, Java or Python
-    cd "$target_location"/"$1"
+    # cd "$target_location"/"$1"
 
-    for each_code_file in */*
+    for each_code_file in "$target_location"/"$1"/*/*
     do
         if [[ "$1" == "C" ]] && [[ "$each_code_file" != *.c ]]
         then
@@ -42,17 +42,18 @@ evaluate()
         not_matched=0
         # echo "$each_code_file"
         student_id=${each_code_file%%/?ain.*}
+        student_id=${student_id##*/}
         echo "student_id: " "$student_id"
 
         if [[ "$1" == "C" ]]
         then
-            gcc "$each_code_file" -o "$student_id"/main.out
+            gcc "$each_code_file" -o "$target_location"/"$1"/"$student_id"/main.out
         elif [[ "$1" == "Java" ]]
         then
             javac "$each_code_file"
         fi
 
-        for each_test_case in ../../"$test_location"/*
+        for each_test_case in "$test_location"/*
         do
             # echo "$each_test_case"
             test_no=${each_test_case##*test}
@@ -61,18 +62,18 @@ evaluate()
 
             if [[ "$1" == "C" ]]
             then
-                "$student_id"/main.out < "$each_test_case" > "$student_id"/out"$test_no".txt
+                "$target_location"/"$1"/"$student_id"/main.out < "$each_test_case" > "$target_location"/"$1"/"$student_id"/out"$test_no".txt
             elif [[ "$1" == "Java" ]]
             then
-                cd "$student_id"
-                java Main < ../"$each_test_case" > out"$test_no".txt
-                cd ..
+                cd "$target_location"/"$1"/"$student_id"
+                java Main < ../../../"$each_test_case" > out"$test_no".txt
+                cd ../../..
             elif [[ "$1" == "Python" ]]
             then
-                python3 "$student_id"/main.py < "$each_test_case" > "$student_id"/out"$test_no".txt
+                python3 "$target_location"/"$1"/"$student_id"/main.py < "$each_test_case" > "$target_location"/"$1"/"$student_id"/out"$test_no".txt
             fi
 
-            if [[ -z $(diff "$student_id"/out"$test_no".txt ../../"$answer_location"/ans"$test_no".txt) ]]
+            if [[ -z $(diff "$target_location"/"$1"/"$student_id"/out"$test_no".txt "$answer_location"/ans"$test_no".txt) ]]
             then
                 # echo "matched"
                 matched=$(($matched + 1))
@@ -81,10 +82,10 @@ evaluate()
                 not_matched=$(($not_matched + 1))
             fi
         done
-        echo $student_id,"$1",$matched,$not_matched >> ../result.csv
+        echo $student_id,"$1",$matched,$not_matched >> "$target_location"/result.csv
     done    
 
-    cd ../..
+    # cd ../..
 }
 
 # create the target directory
