@@ -23,9 +23,11 @@ visit()
 evaluate()
 {   
     # first parameter is language, C, Java or Python
+    # second parameter is student id
+
     # cd "$target_location"/"$1"
 
-    for each_code_file in "$target_location"/"$1"/*/*
+    for each_code_file in "$target_location"/"$1"/"$2"/*
     do
         if [[ "$1" == "C" ]] && [[ "$each_code_file" != *.c ]]
         then
@@ -41,9 +43,6 @@ evaluate()
         matched=0
         not_matched=0
         # echo "$each_code_file"
-        student_id=${each_code_file%%/?ain.*}
-        student_id=${student_id##*/}
-        echo "student_id: " "$student_id"
 
         if [[ "$1" == "C" ]]
         then
@@ -62,18 +61,18 @@ evaluate()
 
             if [[ "$1" == "C" ]]
             then
-                "$target_location"/"$1"/"$student_id"/main.out < "$each_test_case" > "$target_location"/"$1"/"$student_id"/out"$test_no".txt
+                "$target_location"/"$1"/"$2"/main.out < "$each_test_case" > "$target_location"/"$1"/"$2"/out"$test_no".txt
             elif [[ "$1" == "Java" ]]
             then
-                cd "$target_location"/"$1"/"$student_id"
+                cd "$target_location"/"$1"/"$2"
                 java Main < ../../../"$each_test_case" > out"$test_no".txt
                 cd ../../..
             elif [[ "$1" == "Python" ]]
             then
-                python3 "$target_location"/"$1"/"$student_id"/main.py < "$each_test_case" > "$target_location"/"$1"/"$student_id"/out"$test_no".txt
+                python3 "$target_location"/"$1"/"$2"/main.py < "$each_test_case" > "$target_location"/"$1"/"$2"/out"$test_no".txt
             fi
 
-            if [[ -z $(diff "$target_location"/"$1"/"$student_id"/out"$test_no".txt "$answer_location"/ans"$test_no".txt) ]]
+            if [[ -z $(diff "$target_location"/"$1"/"$2"/out"$test_no".txt "$answer_location"/ans"$test_no".txt) ]]
             then
                 # echo "matched"
                 matched=$(($matched + 1))
@@ -82,16 +81,34 @@ evaluate()
                 not_matched=$(($not_matched + 1))
             fi
         done
-        echo $student_id,"$1",$matched,$not_matched >> "$target_location"/result.csv
+        echo "$2","$1",$matched,$not_matched >> "$target_location"/result.csv
     done    
 
     # cd ../..
 }
 
+if [[ $# < 4 ]]
+then
+    echo "Usage:"
+    echo "./organize.sh <submission_folder> <target_folder> <test_folder> <answer_folder> [-v] [-noexecute]"
+    echo ""
+    echo "-v: verbose"
+    echo "-noexecute: do not execute code files"
+    echo ""
+    exit 1
+fi
+
 # create the target directory
+rm -rf "$target_location"
 mkdir -p "$target_location"/C "$target_location"/Java "$target_location"/Python
 
 mkdir -p "$submission_location"/unzipped_submissions
+
+if [[ $# > 4 ]] && [[ $5 != "-noexecute" ]] && [[ $6 != "-noexecute" ]]
+then
+    touch "$target_location"/result.csv
+    echo "student_id,type,matched,not_matched" > "$target_location"/result.csv
+fi
 
 for each_submission in "$submission_location"/*
 do 
@@ -100,8 +117,13 @@ do
         # echo "$each_submission"
         student_id=${each_submission##*_} # remove the longest prefix matching the pattern *_
         student_id=${student_id%%.zip} # remove the longest suffix matching the pattern .zip
-        # echo "$student_id"
-        unzip "$each_submission" -d "$submission_location"/unzipped_submissions
+        
+        if [[ $# > 4 ]] && [[ $5 == "-v" ]]
+        then
+            echo "Organizing files of" "$student_id"
+        fi
+
+        unzip -qq "$each_submission" -d "$submission_location"/unzipped_submissions
 
         # for each in $(ls "$submission_location"/unzipped_submissions/*) -> here $each would contain just the file name, no path
 
@@ -111,28 +133,34 @@ do
         
         if [[ $main_file_location == *.c ]]
         then
+            language=C
             mkdir "$target_location"/C/"$student_id"
             mv "$main_file_location" "$target_location"/C/"$student_id"/main.c
         elif [[ $main_file_location == *.java ]]
         then
+            language=Java
             mkdir "$target_location"/Java/"$student_id"
             mv "$main_file_location" "$target_location"/Java/"$student_id"/Main.java
         elif [[ $main_file_location == *.py ]]
         then
+            language=Python
             mkdir "$target_location"/Python/"$student_id"
             mv "$main_file_location" "$target_location"/Python/"$student_id"/main.py
         fi
         
-        rm -r "$submission_location"/unzipped_submissions/*
+        if [[ $# > 4 ]] && [[ $5 == "-v" ]]
+        then
+            echo "Executing files of" "$student_id"
+        fi
+        
+        if [[ $# > 4 ]] && [[ $5 != "-noexecute" ]] && [[ $6 != "-noexecute" ]]
+        then
+            evaluate "$language" "$student_id"
+        fi
+
+        rm -rf "$submission_location"/unzipped_submissions/*
     fi
 
 done
 
-rm -r "$submission_location"/unzipped_submissions
-
-touch "$target_location"/result.csv
-echo "student_id,type,matched,not_matched" > "$target_location"/result.csv
-
-evaluate "C"
-evaluate "Java"
-evaluate "Python"
+rm -rf "$submission_location"/unzipped_submissions
