@@ -5,7 +5,7 @@ target_location=$2
 test_location=$3
 answer_location=$4
 verbose=n
-noexec=n
+noexecute=n
 
 if [[ $# > 4 ]]
 then
@@ -14,9 +14,9 @@ then
         verbose=y
     fi
 
-    if [[ "$5" = "-noexec" ]] || [[ "$6" = "-noexec" ]]
+    if [[ "$5" = "-noexecute" ]] || [[ "$6" = "-noexecute" ]]
     then
-        noexec=y
+        noexecute=y
     fi
 fi
 
@@ -119,7 +119,7 @@ mkdir -p "$target_location"/C "$target_location"/Java "$target_location"/Python
 
 mkdir -p "$submission_location"/unzipped_submissions
 
-if [[ $noexec = "n" ]]
+if [[ $noexecute = "n" ]]
 then
     touch "$target_location"/result.csv
     echo "student_id,type,matched,not_matched" > "$target_location"/result.csv
@@ -164,7 +164,7 @@ do
             mv "$main_file_location" "$target_location"/Python/"$student_id"/main.py
         fi
 
-        if [[ $noexec = "n" ]]
+        if [[ $noexecute = "n" ]]
         then
             evaluate "$language" "$student_id"
         fi
