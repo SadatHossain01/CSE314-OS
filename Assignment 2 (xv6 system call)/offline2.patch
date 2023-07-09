@@ -43,7 +43,7 @@ index a3c962b..29538df 100644
  // number of elements in fixed-size array
  #define NELEM(x) (sizeof(x)/sizeof((x)[0]))
 diff --git a/kernel/kernelvec.S b/kernel/kernelvec.S
-index fb31b32..88d653f 100644
+index fb31b32..4714b01 100644
 --- a/kernel/kernelvec.S
 +++ b/kernel/kernelvec.S
 @@ -97,12 +97,17 @@ timervec:
@@ -70,12 +70,12 @@ index fb31b32..88d653f 100644
          mret
 +
 +halt:
-+        # based on qemu's hw/riscv/virt.c: 
++        # based on qemu's hw/riscv/virt.c:
 +        # qemu halts [as per hw/misc/sifive_test.c] if
-+        # FINISHER_PASS(=0x5555) [value from include/hw/misc/sifive_test.h] 
++        # FINISHER_PASS(=0x5555) [value from include/hw/misc/sifive_test.h]
 +        # is written at address *VIRT_TEST(=0x100000L) [also found from hw/riscv/virt.c]
-+        
-+        # RISC-V lui loads 20-bit immediate value 
++
++        # RISC-V lui loads 20-bit immediate value
 +        # into the upper 20 bits of a 32-bit register
 +        lui a1, 0x100
 +        lui a2, 0x5
@@ -135,7 +135,7 @@ index d021857..157837f 100644
 +  char sargs[6][MAXPATH]; // string arguments (string arguments of syscalls only used for file names)
  };
 diff --git a/kernel/start.c b/kernel/start.c
-index e16f18a..1d2e981 100644
+index e16f18a..528d710 100644
 --- a/kernel/start.c
 +++ b/kernel/start.c
 @@ -11,7 +11,8 @@ void timerinit();
@@ -167,14 +167,14 @@ index e16f18a..1d2e981 100644
 +
 +
 +// offline 2 : exit
-+void 
++void
 +halt(void)
 +{
 +  // set halt flag in scratch area for hartid[0] to 1.
 +  timer_scratch[0][5] = 1;
 +}
 diff --git a/kernel/syscall.c b/kernel/syscall.c
-index ed65409..e3519a5 100644
+index ed65409..2dc14d8 100644
 --- a/kernel/syscall.c
 +++ b/kernel/syscall.c
 @@ -6,6 +6,7 @@
@@ -250,8 +250,8 @@ index ed65409..e3519a5 100644
 +[SYS_trace]   sys_trace,      // offline 2 : trace
 +[SYS_history] sys_history,    // offline 2 : history
 +[SYS_shutdown] sys_shutdown,  // offline 2 : exit
- };
- 
++};
++
 +
 +// offline 2 : history (and trace)
 +struct syscall_status syscall_stats[] = {
@@ -262,8 +262,8 @@ index ed65409..e3519a5 100644
 +  {"sleep"}, {"uptime"}, {"open"}, {"write"},
 +  {"mknod"}, {"unlink"}, {"link"}, {"mkdir"},
 +  {"close"}, {"trace"}, {"history"}, {"shutdown"},
-+};
-+
+ };
+ 
 +
 +// offline 2 : history
 +void
@@ -296,10 +296,17 @@ index ed65409..e3519a5 100644
  void
  syscall(void)
  {
-@@ -136,9 +209,42 @@ syscall(void)
+@@ -135,11 +208,51 @@ syscall(void)
+   struct proc *p = myproc();
  
    num = p->trapframe->a7;
-   if(num > 0 && num < NELEM(syscalls) && syscalls[num]) {
+-  if(num > 0 && num < NELEM(syscalls) && syscalls[num]) {
++  int should_print = 0;
++  if (p->trace_id == num)
++    should_print = 1;
++
++  if (num > 0 && num < NELEM(syscalls) && syscalls[num])
++  {
 +    acquire(&tickslock);
 +    uint64 ticks0 = ticks;
 +    release(&tickslock);
@@ -307,6 +314,7 @@ index ed65409..e3519a5 100644
      // Use num to lookup the system call function for num, call it,
      // and store its return value in p->trapframe->a0
      p->trapframe->a0 = syscalls[num]();
+-  } else {
 +
 +    acquire(&tickslock);
 +    ticks0 = ticks - ticks0;
@@ -318,7 +326,7 @@ index ed65409..e3519a5 100644
 +    release(&syscall_stats[num].lock);
 +
 +    // offline 2 : trace
-+    if (p->trace_id == num) { // we wanted to trace this
++    if (should_print) { // we wanted to trace this
 +      printf("pid: %d, syscall: %s, args: (", p->pid, syscall_stats[num].syscall_name);
 +      for (int i = 0; i < 6; i++) {
 +        char c = p->arg_types[i];
@@ -336,9 +344,12 @@ index ed65409..e3519a5 100644
 +
 +      printf("), return: %d\n", p->trapframe->a0);
 +    }
-   } else {
++  }
++  else
++  {
      printf("%d %s: unknown sys call %d\n",
              p->pid, p->name, num);
+     p->trapframe->a0 = -1;
 diff --git a/kernel/syscall.h b/kernel/syscall.h
 index bc5f356..ea3c59d 100644
 --- a/kernel/syscall.h
@@ -366,7 +377,7 @@ index 0000000..fcaab95
 +};
 \ No newline at end of file
 diff --git a/kernel/sysproc.c b/kernel/sysproc.c
-index 1de184e..4bd0cda 100644
+index 1de184e..72b7b98 100644
 --- a/kernel/sysproc.c
 +++ b/kernel/sysproc.c
 @@ -5,6 +5,7 @@
@@ -377,7 +388,7 @@ index 1de184e..4bd0cda 100644
  
  uint64
  sys_exit(void)
-@@ -89,3 +90,37 @@ sys_uptime(void)
+@@ -89,3 +90,35 @@ sys_uptime(void)
    release(&tickslock);
    return xticks;
  }
@@ -392,8 +403,6 @@ index 1de184e..4bd0cda 100644
 +    return -1;
 +  struct proc *p = myproc();  // myproc() returns the current process
 +  p->trace_id = syscall_num;
-+  argint(0, &syscall_num);    // again calling so that now argint can get trace_id properly
-+
 +  return 0;
 +}
 +
