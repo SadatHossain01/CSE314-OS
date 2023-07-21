@@ -61,7 +61,7 @@ index 6624bff..96b8ca3 100644
 +#define DEFAULT_TICKET_COUNT    10
 \ No newline at end of file
 diff --git a/kernel/proc.c b/kernel/proc.c
-index 959b778..9faf526 100644
+index 959b778..6366392 100644
 --- a/kernel/proc.c
 +++ b/kernel/proc.c
 @@ -5,6 +5,8 @@
@@ -93,7 +93,7 @@ index 959b778..9faf526 100644
 +  acquire(&p->lock);
 +  original_tickets = p->original_tickets;
 +  release(&p->lock);
-+  
++
 +
    acquire(&np->lock);
 +  np->original_tickets = original_tickets;
@@ -103,7 +103,7 @@ index 959b778..9faf526 100644
    np->state = RUNNABLE;
    release(&np->lock);
  
-@@ -452,19 +469,60 @@ scheduler(void)
+@@ -452,19 +469,62 @@ scheduler(void)
      // Avoid deadlock by ensuring that devices can interrupt.
      intr_on();
  
@@ -146,11 +146,12 @@ index 959b778..9faf526 100644
 +          if (random_number <= cumulative_sum && p->current_tickets != 0 && allocated == 0) {
 +            allocated = 1;
 +            p->current_tickets--;
-+            
++
 +            // Switch to chosen process.  It is the process's job
 +            // to release its lock and then reacquire it
 +            // before jumping back to us.
 +            p->state = RUNNING;
++            p->current_time_slices = 0;
 +            // printf("pid %d is running\n", p->pid);
 +            c->proc = p;
 +            swtch(&c->context, &p->context);
@@ -165,6 +166,7 @@ index 959b778..9faf526 100644
 +        if (p->state == RUNNABLE) {
 +          // printf("runnable pid %d found in queue 2\n", p->pid);
 +          p->state = RUNNING;
++          p->current_time_slices = 0;
 +          c->proc = p;
 +          swtch(&c->context, &p->context);
 +
@@ -175,7 +177,7 @@ index 959b778..9faf526 100644
        }
        release(&p->lock);
      }
-@@ -481,7 +539,6 @@ scheduler(void)
+@@ -481,7 +541,6 @@ scheduler(void)
  void
  sched(void)
  {
@@ -183,7 +185,7 @@ index 959b778..9faf526 100644
    struct proc *p = myproc();
  
    if(!holding(&p->lock))
-@@ -493,8 +550,40 @@ sched(void)
+@@ -493,8 +552,40 @@ sched(void)
    if(intr_get())
      panic("sched interruptible");
  
@@ -198,8 +200,9 @@ index 959b778..9faf526 100644
 +
 +  else if (p->inQ == 2) {
 +    if (p->current_time_slices < TIME_LIMIT_2) {
-+        if (p->state == RUNNABLE) // process voluntarily gave up CPU
++        if (p->state == RUNNABLE) {// process voluntarily gave up CPU
 +          p->inQ = 1; // promote to queue 1
++        }
 +        if (p->state != RUNNING) switch_to_scheduler();
 +        // otherwise don't switch to scheduler, let the process continue
 +    }
@@ -212,30 +215,31 @@ index 959b778..9faf526 100644
 +{
 +  // process has consumed all its time slices
 +  p->inQ = 2; // demote to queue 2
-+  p->total_time_slices += p->current_time_slices;
 +  p->current_time_slices = 0;
 +
-+  switch_to_scheduler();  
++  switch_to_scheduler();
 +}
 +
-+void 
-+switch_to_scheduler(void) 
++void
++switch_to_scheduler(void)
 +{
 +  int intena = mycpu()->intena;
 +  swtch(&myproc()->context, &mycpu()->context);
    mycpu()->intena = intena;
  }
  
-@@ -505,6 +594,8 @@ yield(void)
+@@ -505,6 +596,10 @@ yield(void)
    struct proc *p = myproc();
    acquire(&p->lock);
    p->state = RUNNABLE;
 +  p->current_time_slices++;
++  p->total_time_slices++;
++  // printf("pid %d slice %d\n", p->pid, p->total_time_slices);
 +  if (p->inQ == 1) p->current_tickets--;
    sched();
    release(&p->lock);
  }
-@@ -681,3 +772,55 @@ procdump(void)
+@@ -681,3 +776,55 @@ procdump(void)
      printf("\n");
    }
  }
@@ -246,7 +250,7 @@ index 959b778..9faf526 100644
 +  struct proc* cp = myproc();
 +  acquire(&cp->lock);
 +  cp->original_tickets = ticket_number;
-+  printf("set ticket of pid %d to %d\n", cp->pid, cp->original_tickets);
++  // printf("set ticket of pid %d to %d\n", cp->pid, cp->original_tickets);
 +  release(&cp->lock);
 +
 +  return 0;
@@ -258,7 +262,7 @@ index 959b778..9faf526 100644
 +  struct proc* mp = myproc();
 +  struct proc* p;
 +  struct pstat pst;
-+  
++
 +  int i = 0;
 +  for (p = proc; p < &proc[NPROC]; p++) {
 +    acquire(&p->lock);
@@ -289,7 +293,7 @@ index 959b778..9faf526 100644
 +      total += p->current_tickets;
 +    release(&p->lock);
 +  }
-+  return total;  
++  return total;
 +}
 \ No newline at end of file
 diff --git a/kernel/proc.h b/kernel/proc.h
@@ -536,7 +540,7 @@ index 1de184e..2b4af5f 100644
 +}
 \ No newline at end of file
 diff --git a/kernel/trap.c b/kernel/trap.c
-index 512c850..a503360 100644
+index 512c850..cd18f2d 100644
 --- a/kernel/trap.c
 +++ b/kernel/trap.c
 @@ -10,6 +10,7 @@ struct spinlock tickslock;
@@ -561,7 +565,7 @@ index 512c850..a503360 100644
 +    for (p = proc; p < &proc[NPROC]; p++) {
 +      acquire(&p->lock);
 +      if (p->state == RUNNABLE) {
-+        printf("boosted pid %d\n", p->pid);
++        // printf("boosted pid %d\n", p->pid);
 +        p->inQ = 1;
 +      }
 +      release(&p->lock);
@@ -572,10 +576,10 @@ index 512c850..a503360 100644
  // check if it's an external interrupt or software interrupt,
 diff --git a/user/dummyproc.c b/user/dummyproc.c
 new file mode 100644
-index 0000000..faa0d78
+index 0000000..7c07c9d
 --- /dev/null
 +++ b/user/dummyproc.c
-@@ -0,0 +1,20 @@
+@@ -0,0 +1,26 @@
 +#include "kernel/types.h"
 +#include "kernel/stat.h"
 +#include "user/user.h"
@@ -594,12 +598,18 @@ index 0000000..faa0d78
 +        exit(1);
 +    }
 +
++    if (fork() == 0) {
++        uint64 i = 1000000000;
++        while (i--)
++            ;
++    }
++
 +    exit(0);
 +}
 \ No newline at end of file
 diff --git a/user/testprocinfo.c b/user/testprocinfo.c
 new file mode 100644
-index 0000000..0770bf5
+index 0000000..721869e
 --- /dev/null
 +++ b/user/testprocinfo.c
 @@ -0,0 +1,24 @@
@@ -620,7 +630,7 @@ index 0000000..0770bf5
 +
 +    printf("PID\t|\tIn Use\t|\tinQ\t|\tOriginal Tickets\t|\tCurrent Tickets\t|\tTime Slices\n");
 +    for (int i = 0; i < NPROC; i++) {
-+        if (pstat.inuse[i] == 0)
++        if (pstat.pid[i] == 0)
 +            continue;
 +        printf("%d\t\t%d\t\t%d\t\t%d\t\t\t\t%d\t\t\t%d\n", pstat.pid[i], pstat.inuse[i], pstat.inQ[i], pstat.tickets_original[i], pstat.tickets_current[i], pstat.time_slices[i]);
 +    }
