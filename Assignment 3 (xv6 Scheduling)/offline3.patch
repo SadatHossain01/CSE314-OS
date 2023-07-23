@@ -21,28 +21,26 @@ index 39a99d7..6978d95 100644
  
  QEMUOPTS = -machine virt -bios none -kernel $K/kernel -m 128M -smp $(CPUS) -nographic
 diff --git a/kernel/defs.h b/kernel/defs.h
-index a3c962b..19d2fc9 100644
+index a3c962b..1ac47a9 100644
 --- a/kernel/defs.h
 +++ b/kernel/defs.h
-@@ -106,6 +106,11 @@ void            yield(void);
+@@ -106,6 +106,9 @@ void            yield(void);
  int             either_copyout(int user_dst, uint64 dst, void *src, uint64 len);
  int             either_copyin(void *dst, int user_src, uint64 src, uint64 len);
  void            procdump(void);
-+int             settickets(int);                            // Offline 3
-+int             getpinfo(uint64);                           // Offline 3
-+int             get_active_ticket_count(void);              // Offline 3
-+void            handle_all_slices_consumed(struct proc*);
-+void            switch_to_scheduler(void);                  // Offline 3
++int             settickets(int);
++int             getpinfo(uint64);
++int             get_active_ticket_count(void);
  
  // swtch.S
  void            swtch(struct context*, struct context*);
-@@ -185,5 +190,9 @@ void            virtio_disk_init(void);
+@@ -185,5 +188,9 @@ void            virtio_disk_init(void);
  void            virtio_disk_rw(struct buf *, int);
  void            virtio_disk_intr(void);
  
 +// rand.c
-+long            genrand(void);          // Offline 3
-+long            random_at_most(long);   // Offline 3
++long            genrand(void);
++long            random_at_most(long);
 +
  // number of elements in fixed-size array
  #define NELEM(x) (sizeof(x)/sizeof((x)[0]))
@@ -61,36 +59,50 @@ index 6624bff..96b8ca3 100644
 +#define DEFAULT_TICKET_COUNT    10
 \ No newline at end of file
 diff --git a/kernel/proc.c b/kernel/proc.c
-index 959b778..6366392 100644
+index 959b778..4395a8f 100644
 --- a/kernel/proc.c
 +++ b/kernel/proc.c
-@@ -5,6 +5,8 @@
+@@ -5,6 +5,11 @@
  #include "spinlock.h"
  #include "proc.h"
  #include "defs.h"
 +#include "pstat.h"
 +#include "rand.c"
++
++struct spinlock scheduler_lock;
++const int log_print = 0;
  
  struct cpu cpus[NCPU];
  
-@@ -124,6 +126,11 @@ allocproc(void)
+@@ -51,6 +56,7 @@ procinit(void)
+   
+   initlock(&pid_lock, "nextpid");
+   initlock(&wait_lock, "wait_lock");
++  initlock(&scheduler_lock, "scheduler");
+   for(p = proc; p < &proc[NPROC]; p++) {
+       initlock(&p->lock, "proc");
+       p->state = UNUSED;
+@@ -124,6 +130,13 @@ allocproc(void)
  found:
    p->pid = allocpid();
    p->state = USED;
 +  p->inQ = 1;
++  acquire(&scheduler_lock);
 +  p->original_tickets = DEFAULT_TICKET_COUNT;
 +  p->current_tickets = DEFAULT_TICKET_COUNT;
++  release(&scheduler_lock);
 +  p->current_time_slices = 0;
 +  p->total_time_slices = 0;
  
    // Allocate a trapframe page.
    if((p->trapframe = (struct trapframe *)kalloc()) == 0){
-@@ -318,7 +325,17 @@ fork(void)
+@@ -318,7 +331,19 @@ fork(void)
    np->parent = p;
    release(&wait_lock);
  
 +  int original_tickets = 0;
 +  acquire(&p->lock);
++  acquire(&scheduler_lock);
 +  original_tickets = p->original_tickets;
 +  release(&p->lock);
 +
@@ -98,22 +110,28 @@ index 959b778..6366392 100644
    acquire(&np->lock);
 +  np->original_tickets = original_tickets;
 +  np->current_tickets = original_tickets;
++  release(&scheduler_lock);
 +  np->current_time_slices = 0;
 +  np->total_time_slices = 0;
    np->state = RUNNABLE;
    release(&np->lock);
  
-@@ -452,19 +469,62 @@ scheduler(void)
+@@ -452,19 +477,91 @@ scheduler(void)
      // Avoid deadlock by ensuring that devices can interrupt.
      intr_on();
  
+-    for(p = proc; p < &proc[NPROC]; p++) {
++    // Queue 1 : Lottery Scheduling
 +    int total_current_tickets = get_active_ticket_count();
++
++    acquire(&scheduler_lock); // for multiple CPUs
++    
 +    // all the processes reinitialized with original ticket count once
 +    // ticket count of all runnable processes becomes 0
 +    if (total_current_tickets == 0) {
 +      for (p = proc; p < &proc[NPROC]; p++) {
 +        acquire(&p->lock);
-+        if (p->state == RUNNABLE) {
++        if (p->state == RUNNABLE && p->inQ == 1) {
 +          p->current_tickets = p->original_tickets;
 +          total_current_tickets += p->current_tickets;
 +        }
@@ -125,46 +143,29 @@ index 959b778..6366392 100644
 +    int cumulative_sum = 0;
 +    int allocated = 0;
 +
-     for(p = proc; p < &proc[NPROC]; p++) {
++    for (int lottery_idx = 0; lottery_idx < NPROC; lottery_idx++) {
++      p = &proc[lottery_idx];
        acquire(&p->lock);
--      if(p->state == RUNNABLE) {
++      
++      if (p->inQ != 1) {
++        release(&p->lock);
++        continue;
++      }
++      
+       if(p->state == RUNNABLE) {
 -        // Switch to chosen process.  It is the process's job
 -        // to release its lock and then reacquire it
 -        // before jumping back to us.
--        p->state = RUNNING;
--        c->proc = p;
--        swtch(&c->context, &p->context);
--
--        // Process is done running for now.
--        // It should have changed its p->state before coming back.
--        c->proc = 0;
++        cumulative_sum += p->current_tickets;
++        if (random_number <= cumulative_sum && p->current_tickets != 0) {
++          if (log_print) printf("Lottery pid: %d, idx: %d\n", p->pid, lottery_idx);
++          allocated = 1;
++          p->current_tickets--;
++          release(&scheduler_lock);
 +
-+      if (p->inQ == 1) { // queue 1 : lottery scheduling
-+        if(p->state == RUNNABLE) {
-+          // printf("runnable pid %d found in queue 1\n", p->pid);
-+          cumulative_sum += p->current_tickets;
-+          if (random_number <= cumulative_sum && p->current_tickets != 0 && allocated == 0) {
-+            allocated = 1;
-+            p->current_tickets--;
-+
-+            // Switch to chosen process.  It is the process's job
-+            // to release its lock and then reacquire it
-+            // before jumping back to us.
-+            p->state = RUNNING;
-+            p->current_time_slices = 0;
-+            // printf("pid %d is running\n", p->pid);
-+            c->proc = p;
-+            swtch(&c->context, &p->context);
-+
-+            // Process is done running for now.
-+            // It should have changed its p->state before coming back.
-+            c->proc = 0;
-+          }
-+        }
-+      }
-+      else if (p->inQ == 2) { // queue 2 : round robin scheduling
-+        if (p->state == RUNNABLE) {
-+          // printf("runnable pid %d found in queue 2\n", p->pid);
++          // Switch to chosen process.  It is the process's job
++          // to release its lock and then reacquire it
++          // before jumping back to us.
 +          p->state = RUNNING;
 +          p->current_time_slices = 0;
 +          c->proc = p;
@@ -173,73 +174,83 @@ index 959b778..6366392 100644
 +          // Process is done running for now.
 +          // It should have changed its p->state before coming back.
 +          c->proc = 0;
++          release(&p->lock);
++          break; // do all lottery calculations from scratch again
 +        }
++      }
++      
++      release(&p->lock);
++    }
++
++    if (allocated) continue;
++    release(&scheduler_lock);
++
++    // Queue 2 : Round Robin Scheduling
++    for (int round_robin_idx = 0; round_robin_idx < NPROC; round_robin_idx++) {
++      if (round_robin_idx == NPROC) round_robin_idx = 0;
++      p = &proc[round_robin_idx];
++
++      acquire(&p->lock);
++      
++      if (p->inQ != 2) {
++        release(&p->lock);
++        continue;
++      }
++      
++      if (p->state == RUNNABLE) {
++        if (log_print) printf("Round Robin pid: %d, idx: %d\n", p->pid, round_robin_idx);
+         p->state = RUNNING;
++        p->current_time_slices = 0;
+         c->proc = p;
+         swtch(&c->context, &p->context);
+ 
+         // Process is done running for now.
+         // It should have changed its p->state before coming back.
+         c->proc = 0;
++        release(&p->lock);
++        break;
        }
        release(&p->lock);
      }
-@@ -481,7 +541,6 @@ scheduler(void)
- void
- sched(void)
- {
--  int intena;
-   struct proc *p = myproc();
- 
-   if(!holding(&p->lock))
-@@ -493,8 +552,40 @@ sched(void)
+@@ -493,6 +590,10 @@ sched(void)
    if(intr_get())
      panic("sched interruptible");
  
--  intena = mycpu()->intena;
--  swtch(&p->context, &mycpu()->context);
-+  if (p->inQ == 1) {
-+    if (p->current_time_slices < TIME_LIMIT_1) {
-+      if (p->state != RUNNING) switch_to_scheduler();
-+    }
-+    else handle_all_slices_consumed(p); // all slices consumed
++  if (p->inQ == 2 && p->state == SLEEPING && p->current_time_slices < TIME_LIMIT_2) {
++    p->inQ = 1; // promote to queue 1
 +  }
 +
-+  else if (p->inQ == 2) {
-+    if (p->current_time_slices < TIME_LIMIT_2) {
-+        if (p->state == RUNNABLE) {// process voluntarily gave up CPU
-+          p->inQ = 1; // promote to queue 1
-+        }
-+        if (p->state != RUNNING) switch_to_scheduler();
-+        // otherwise don't switch to scheduler, let the process continue
-+    }
-+    else handle_all_slices_consumed(p); // all slices consumed
-+  }
-+}
-+
-+void
-+handle_all_slices_consumed(struct proc* p)
-+{
-+  // process has consumed all its time slices
-+  p->inQ = 2; // demote to queue 2
-+  p->current_time_slices = 0;
-+
-+  switch_to_scheduler();
-+}
-+
-+void
-+switch_to_scheduler(void)
-+{
-+  int intena = mycpu()->intena;
-+  swtch(&myproc()->context, &mycpu()->context);
+   intena = mycpu()->intena;
+   swtch(&p->context, &mycpu()->context);
    mycpu()->intena = intena;
- }
- 
-@@ -505,6 +596,10 @@ yield(void)
+@@ -505,7 +606,25 @@ yield(void)
    struct proc *p = myproc();
    acquire(&p->lock);
    p->state = RUNNABLE;
+-  sched();
 +  p->current_time_slices++;
 +  p->total_time_slices++;
-+  // printf("pid %d slice %d\n", p->pid, p->total_time_slices);
-+  if (p->inQ == 1) p->current_tickets--;
-   sched();
++
++  if (p->inQ == 1) {
++    acquire(&scheduler_lock);
++    p->current_tickets--;
++    release(&scheduler_lock);
++    if (p->current_time_slices >= TIME_LIMIT_1) {
++      // consumed all slices
++      p->inQ = 2; // demote to queue 2
++      sched();
++    }
++    else p->state = RUNNING;
++  }
++  else if (p->inQ == 2) {
++    if (p->current_time_slices >= TIME_LIMIT_2) sched();
++    else p->state = RUNNING;
++  }
++
    release(&p->lock);
  }
-@@ -681,3 +776,55 @@ procdump(void)
+ 
+@@ -681,3 +800,60 @@ procdump(void)
      printf("\n");
    }
  }
@@ -249,8 +260,9 @@ index 959b778..6366392 100644
 +{
 +  struct proc* cp = myproc();
 +  acquire(&cp->lock);
++  acquire(&scheduler_lock);
 +  cp->original_tickets = ticket_number;
-+  // printf("set ticket of pid %d to %d\n", cp->pid, cp->original_tickets);
++  release(&scheduler_lock);
 +  release(&cp->lock);
 +
 +  return 0;
@@ -264,6 +276,7 @@ index 959b778..6366392 100644
 +  struct pstat pst;
 +
 +  int i = 0;
++  acquire(&scheduler_lock);
 +  for (p = proc; p < &proc[NPROC]; p++) {
 +    acquire(&p->lock);
 +    pst.pid[i] = p->pid;
@@ -275,6 +288,7 @@ index 959b778..6366392 100644
 +    release(&p->lock);
 +    i++;
 +  }
++  release(&scheduler_lock);
 +
 +  if (copyout(mp->pagetable, addr, (char *) &pst, sizeof(pst)) < 0)
 +    return -1;
@@ -287,12 +301,14 @@ index 959b778..6366392 100644
 +{
 +  struct proc* p;
 +  int total = 0;
++  acquire(&scheduler_lock);
 +  for (p = proc; p < &proc[NPROC]; p++) {
 +    acquire(&p->lock);
 +    if (p->state == RUNNABLE)
 +      total += p->current_tickets;
 +    release(&p->lock);
 +  }
++  release(&scheduler_lock);
 +  return total;
 +}
 \ No newline at end of file
@@ -497,7 +513,7 @@ index bc5f356..fd6756a 100644
 +#define SYS_getpinfo    23
 \ No newline at end of file
 diff --git a/kernel/sysproc.c b/kernel/sysproc.c
-index 1de184e..2b4af5f 100644
+index 1de184e..66637cd 100644
 --- a/kernel/sysproc.c
 +++ b/kernel/sysproc.c
 @@ -5,6 +5,7 @@
@@ -508,11 +524,10 @@ index 1de184e..2b4af5f 100644
  
  uint64
  sys_exit(void)
-@@ -89,3 +90,29 @@ sys_uptime(void)
+@@ -89,3 +90,28 @@ sys_uptime(void)
    release(&tickslock);
    return xticks;
  }
-+
 +
 +// Offline 3
 +uint64
@@ -540,7 +555,7 @@ index 1de184e..2b4af5f 100644
 +}
 \ No newline at end of file
 diff --git a/kernel/trap.c b/kernel/trap.c
-index 512c850..cd18f2d 100644
+index 512c850..754a9ed 100644
 --- a/kernel/trap.c
 +++ b/kernel/trap.c
 @@ -10,6 +10,7 @@ struct spinlock tickslock;
@@ -551,7 +566,14 @@ index 512c850..cd18f2d 100644
  
  // in kernelvec.S, calls kerneltrap().
  void kernelvec();
-@@ -165,8 +166,22 @@ clockintr()
+@@ -160,13 +161,29 @@ kerneltrap()
+   w_sstatus(sstatus);
+ }
+ 
++extern int log_print;
++
+ void
+ clockintr()
  {
    acquire(&tickslock);
    ticks++;
@@ -561,11 +583,11 @@ index 512c850..cd18f2d 100644
 +
 +  // priority boosting
 +  if (should_boost) {
++    if (log_print) printf("boosted\n");
 +    struct proc *p;
 +    for (p = proc; p < &proc[NPROC]; p++) {
 +      acquire(&p->lock);
 +      if (p->state == RUNNABLE) {
-+        // printf("boosted pid %d\n", p->pid);
 +        p->inQ = 1;
 +      }
 +      release(&p->lock);
@@ -576,10 +598,10 @@ index 512c850..cd18f2d 100644
  // check if it's an external interrupt or software interrupt,
 diff --git a/user/dummyproc.c b/user/dummyproc.c
 new file mode 100644
-index 0000000..7c07c9d
+index 0000000..ce58044
 --- /dev/null
 +++ b/user/dummyproc.c
-@@ -0,0 +1,26 @@
+@@ -0,0 +1,33 @@
 +#include "kernel/types.h"
 +#include "kernel/stat.h"
 +#include "user/user.h"
@@ -598,11 +620,18 @@ index 0000000..7c07c9d
 +        exit(1);
 +    }
 +
-+    if (fork() == 0) {
-+        uint64 i = 1000000000;
-+        while (i--)
-+            ;
++    fork();
++    fork();
++    fork();
++    fork();
++
++    int j = 2;
++
++    for (int i = 1; i <= 1000000000; i++) {
++        j++;
 +    }
++
++    j--;
 +
 +    exit(0);
 +}
@@ -639,12 +668,12 @@ index 0000000..721869e
 +}
 \ No newline at end of file
 diff --git a/user/user.h b/user/user.h
-index 4d398d5..c8f6b8a 100644
+index 4d398d5..b5ef267 100644
 --- a/user/user.h
 +++ b/user/user.h
 @@ -1,4 +1,5 @@
  struct stat;
-+struct pstat; // Offline 3
++struct pstat;
  
  // system calls
  int fork(void);
@@ -652,8 +681,8 @@ index 4d398d5..c8f6b8a 100644
  char* sbrk(int);
  int sleep(int);
  int uptime(void);
-+int settickets(int);           // Offline 3
-+int getpinfo(struct pstat *);   // Offline 3
++int settickets(int);
++int getpinfo(struct pstat *);
  
  // ulib.c
  int stat(const char*, struct stat*);
