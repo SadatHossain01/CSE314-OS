@@ -1,5 +1,5 @@
 diff --git a/Makefile b/Makefile
-index 39a99d7..6978d95 100644
+index 39a99d7..d5bcc04 100644
 --- a/Makefile
 +++ b/Makefile
 @@ -132,6 +132,8 @@ UPROGS=\
@@ -11,15 +11,6 @@ index 39a99d7..6978d95 100644
  
  fs.img: mkfs/mkfs README $(UPROGS)
  	mkfs/mkfs fs.img README $(UPROGS)
-@@ -153,7 +155,7 @@ QEMUGDB = $(shell if $(QEMU) -help | grep -q '^-gdb'; \
- 	then echo "-gdb tcp::$(GDBPORT)"; \
- 	else echo "-s -p $(GDBPORT)"; fi)
- ifndef CPUS
--CPUS := 3
-+CPUS := 1
- endif
- 
- QEMUOPTS = -machine virt -bios none -kernel $K/kernel -m 128M -smp $(CPUS) -nographic
 diff --git a/kernel/defs.h b/kernel/defs.h
 index a3c962b..1ac47a9 100644
 --- a/kernel/defs.h
@@ -59,7 +50,7 @@ index 6624bff..96b8ca3 100644
 +#define DEFAULT_TICKET_COUNT    10
 \ No newline at end of file
 diff --git a/kernel/proc.c b/kernel/proc.c
-index 959b778..037ff3f 100644
+index 959b778..6283bf7 100644
 --- a/kernel/proc.c
 +++ b/kernel/proc.c
 @@ -5,6 +5,11 @@
@@ -263,7 +254,7 @@ index 959b778..037ff3f 100644
    release(&p->lock);
  }
  
-@@ -681,3 +806,57 @@ procdump(void)
+@@ -681,3 +806,55 @@ procdump(void)
      printf("\n");
    }
  }
@@ -273,10 +264,8 @@ index 959b778..037ff3f 100644
 +{
 +  struct proc* cp = myproc();
 +  acquire(&cp->lock);
-+  acquire(&scheduler_lock);
 +  cp->original_tickets = ticket_number;
 +  cp->current_tickets = ticket_number;
-+  release(&scheduler_lock);
 +  release(&cp->lock);
 +
 +  return 0;
