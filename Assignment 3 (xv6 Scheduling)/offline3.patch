@@ -59,7 +59,7 @@ index 6624bff..96b8ca3 100644
 +#define DEFAULT_TICKET_COUNT    10
 \ No newline at end of file
 diff --git a/kernel/proc.c b/kernel/proc.c
-index 959b778..4395a8f 100644
+index 959b778..037ff3f 100644
 --- a/kernel/proc.c
 +++ b/kernel/proc.c
 @@ -5,6 +5,11 @@
@@ -82,27 +82,24 @@ index 959b778..4395a8f 100644
    for(p = proc; p < &proc[NPROC]; p++) {
        initlock(&p->lock, "proc");
        p->state = UNUSED;
-@@ -124,6 +130,13 @@ allocproc(void)
+@@ -124,6 +130,11 @@ allocproc(void)
  found:
    p->pid = allocpid();
    p->state = USED;
 +  p->inQ = 1;
-+  acquire(&scheduler_lock);
 +  p->original_tickets = DEFAULT_TICKET_COUNT;
 +  p->current_tickets = DEFAULT_TICKET_COUNT;
-+  release(&scheduler_lock);
 +  p->current_time_slices = 0;
 +  p->total_time_slices = 0;
  
    // Allocate a trapframe page.
    if((p->trapframe = (struct trapframe *)kalloc()) == 0){
-@@ -318,7 +331,19 @@ fork(void)
+@@ -318,8 +329,19 @@ fork(void)
    np->parent = p;
    release(&wait_lock);
  
 +  int original_tickets = 0;
 +  acquire(&p->lock);
-+  acquire(&scheduler_lock);
 +  original_tickets = p->original_tickets;
 +  release(&p->lock);
 +
@@ -110,22 +107,30 @@ index 959b778..4395a8f 100644
    acquire(&np->lock);
 +  np->original_tickets = original_tickets;
 +  np->current_tickets = original_tickets;
-+  release(&scheduler_lock);
 +  np->current_time_slices = 0;
 +  np->total_time_slices = 0;
    np->state = RUNNABLE;
++  np->inQ = 1;
    release(&np->lock);
  
-@@ -452,19 +477,91 @@ scheduler(void)
+   return pid;
+@@ -446,27 +468,101 @@ scheduler(void)
+ {
+   struct proc *p;
+   struct cpu *c = mycpu();
++  int round_robin_idx = 0;
+   
+   c->proc = 0;
+   for(;;){
      // Avoid deadlock by ensuring that devices can interrupt.
      intr_on();
  
 -    for(p = proc; p < &proc[NPROC]; p++) {
 +    // Queue 1 : Lottery Scheduling
-+    int total_current_tickets = get_active_ticket_count();
-+
 +    acquire(&scheduler_lock); // for multiple CPUs
-+    
++    int total_current_tickets = get_active_ticket_count();
++    // printf("Acquired in scheduler\n");
++
 +    // all the processes reinitialized with original ticket count once
 +    // ticket count of all runnable processes becomes 0
 +    if (total_current_tickets == 0) {
@@ -146,84 +151,93 @@ index 959b778..4395a8f 100644
 +    for (int lottery_idx = 0; lottery_idx < NPROC; lottery_idx++) {
 +      p = &proc[lottery_idx];
        acquire(&p->lock);
-+      
-+      if (p->inQ != 1) {
+-      if(p->state == RUNNABLE) {
++
++      if (p->inQ != 1 || p->state != RUNNABLE) {
 +        release(&p->lock);
 +        continue;
 +      }
-+      
-       if(p->state == RUNNABLE) {
--        // Switch to chosen process.  It is the process's job
--        // to release its lock and then reacquire it
--        // before jumping back to us.
-+        cumulative_sum += p->current_tickets;
-+        if (random_number <= cumulative_sum && p->current_tickets != 0) {
-+          if (log_print) printf("Lottery pid: %d, idx: %d\n", p->pid, lottery_idx);
-+          allocated = 1;
-+          p->current_tickets--;
-+          release(&scheduler_lock);
 +
-+          // Switch to chosen process.  It is the process's job
-+          // to release its lock and then reacquire it
-+          // before jumping back to us.
-+          p->state = RUNNING;
-+          p->current_time_slices = 0;
-+          c->proc = p;
-+          swtch(&c->context, &p->context);
++      cumulative_sum += p->current_tickets;
++      if (random_number <= cumulative_sum && p->current_tickets != 0) {
++        if (log_print) printf("Lottery pid: %d, idx: %d\n", p->pid, lottery_idx);
++        allocated = 1;
++        p->current_tickets--;
++        release(&scheduler_lock);
++        // printf("Released in scheduler 1\n");
 +
-+          // Process is done running for now.
-+          // It should have changed its p->state before coming back.
-+          c->proc = 0;
-+          release(&p->lock);
-+          break; // do all lottery calculations from scratch again
-+        }
-+      }
-+      
-+      release(&p->lock);
-+    }
-+
-+    if (allocated) continue;
-+    release(&scheduler_lock);
-+
-+    // Queue 2 : Round Robin Scheduling
-+    for (int round_robin_idx = 0; round_robin_idx < NPROC; round_robin_idx++) {
-+      if (round_robin_idx == NPROC) round_robin_idx = 0;
-+      p = &proc[round_robin_idx];
-+
-+      acquire(&p->lock);
-+      
-+      if (p->inQ != 2) {
-+        release(&p->lock);
-+        continue;
-+      }
-+      
-+      if (p->state == RUNNABLE) {
-+        if (log_print) printf("Round Robin pid: %d, idx: %d\n", p->pid, round_robin_idx);
+         // Switch to chosen process.  It is the process's job
+         // to release its lock and then reacquire it
+         // before jumping back to us.
          p->state = RUNNING;
 +        p->current_time_slices = 0;
          c->proc = p;
          swtch(&c->context, &p->context);
++        // if (log_print) printf("returned lottery pid: %d, idx: %d\n", p->pid, lottery_idx);
  
          // Process is done running for now.
          // It should have changed its p->state before coming back.
          c->proc = 0;
 +        release(&p->lock);
-+        break;
++        break; // do all lottery calculations from scratch again
        }
++      else release(&p->lock);
++    }
++
++    if (allocated) continue;
++    else release(&scheduler_lock);
++    // printf("Released in scheduler 2\n");
++
++    // Queue 2 : Round Robin Scheduling
++    for (int i = 0; i < NPROC; i++, round_robin_idx++) {
++      if (round_robin_idx == NPROC) round_robin_idx = 0;
++      p = &proc[round_robin_idx];
++
++      acquire(&p->lock);
++
++      if (p->inQ != 2 || p->state != RUNNABLE) {
++        release(&p->lock);
++        continue;
++      }
++
++      if (log_print) printf("Round Robin pid: %d, idx: %d\n", p->pid, round_robin_idx);
++      
++      p->state = RUNNING;
++      p->current_time_slices = 0;
++      c->proc = p;
++      round_robin_idx++;
++      allocated = 1;
++      swtch(&c->context, &p->context);
++      // if (log_print) printf("returned round robin pid: %d, idx: %d\n", p->pid, round_robin_idx);
++
++      // Process is done running for now.
++      // It should have changed its p->state before coming back.
++      c->proc = 0;
        release(&p->lock);
++      break;
      }
-@@ -493,6 +590,10 @@ sched(void)
+   }
+ }
+@@ -493,6 +589,18 @@ sched(void)
    if(intr_get())
      panic("sched interruptible");
  
-+  if (p->inQ == 2 && p->state == SLEEPING && p->current_time_slices < TIME_LIMIT_2) {
++  // printf("pid: %d, q: %d\n", p->pid, p->inQ);
++
++  if (p->state == SLEEPING) {
++    p->current_time_slices++;
++    p->total_time_slices++;
++  }
++
++  if (p->inQ == 2 && p->state == SLEEPING && p->current_time_slices <= TIME_LIMIT_2) {
++    // if (log_print) printf("promoted pid: %d\n", p->pid);
 +    p->inQ = 1; // promote to queue 1
 +  }
 +
    intena = mycpu()->intena;
    swtch(&p->context, &mycpu()->context);
    mycpu()->intena = intena;
-@@ -505,7 +606,25 @@ yield(void)
+@@ -505,7 +613,24 @@ yield(void)
    struct proc *p = myproc();
    acquire(&p->lock);
    p->state = RUNNABLE;
@@ -231,10 +245,9 @@ index 959b778..4395a8f 100644
 +  p->current_time_slices++;
 +  p->total_time_slices++;
 +
++  // printf("pid: %d, current_time_slices: %d\n", p->pid, p->current_time_slices);
++
 +  if (p->inQ == 1) {
-+    acquire(&scheduler_lock);
-+    p->current_tickets--;
-+    release(&scheduler_lock);
 +    if (p->current_time_slices >= TIME_LIMIT_1) {
 +      // consumed all slices
 +      p->inQ = 2; // demote to queue 2
@@ -250,7 +263,7 @@ index 959b778..4395a8f 100644
    release(&p->lock);
  }
  
-@@ -681,3 +800,60 @@ procdump(void)
+@@ -681,3 +806,57 @@ procdump(void)
      printf("\n");
    }
  }
@@ -262,6 +275,7 @@ index 959b778..4395a8f 100644
 +  acquire(&cp->lock);
 +  acquire(&scheduler_lock);
 +  cp->original_tickets = ticket_number;
++  cp->current_tickets = ticket_number;
 +  release(&scheduler_lock);
 +  release(&cp->lock);
 +
@@ -276,19 +290,17 @@ index 959b778..4395a8f 100644
 +  struct pstat pst;
 +
 +  int i = 0;
-+  acquire(&scheduler_lock);
 +  for (p = proc; p < &proc[NPROC]; p++) {
 +    acquire(&p->lock);
 +    pst.pid[i] = p->pid;
 +    pst.inQ[i] = p->inQ;
-+    pst.inuse[i] = (p->state != UNUSED);
++    pst.inuse[i] = (p->state == RUNNING || p->state == RUNNABLE);
 +    pst.tickets_original[i] = p->original_tickets;
 +    pst.tickets_current[i] = p->current_tickets;
 +    pst.time_slices[i] = p->total_time_slices;
 +    release(&p->lock);
 +    i++;
 +  }
-+  release(&scheduler_lock);
 +
 +  if (copyout(mp->pagetable, addr, (char *) &pst, sizeof(pst)) < 0)
 +    return -1;
@@ -301,14 +313,12 @@ index 959b778..4395a8f 100644
 +{
 +  struct proc* p;
 +  int total = 0;
-+  acquire(&scheduler_lock);
 +  for (p = proc; p < &proc[NPROC]; p++) {
 +    acquire(&p->lock);
-+    if (p->state == RUNNABLE)
++    if (p->state == RUNNABLE && p->inQ == 1)
 +      total += p->current_tickets;
 +    release(&p->lock);
 +  }
-+  release(&scheduler_lock);
 +  return total;
 +}
 \ No newline at end of file
@@ -555,7 +565,7 @@ index 1de184e..66637cd 100644
 +}
 \ No newline at end of file
 diff --git a/kernel/trap.c b/kernel/trap.c
-index 512c850..754a9ed 100644
+index 512c850..5e17800 100644
 --- a/kernel/trap.c
 +++ b/kernel/trap.c
 @@ -10,6 +10,7 @@ struct spinlock tickslock;
@@ -587,7 +597,7 @@ index 512c850..754a9ed 100644
 +    struct proc *p;
 +    for (p = proc; p < &proc[NPROC]; p++) {
 +      acquire(&p->lock);
-+      if (p->state == RUNNABLE) {
++      if (p->inQ == 2) {
 +        p->inQ = 1;
 +      }
 +      release(&p->lock);
@@ -598,13 +608,15 @@ index 512c850..754a9ed 100644
  // check if it's an external interrupt or software interrupt,
 diff --git a/user/dummyproc.c b/user/dummyproc.c
 new file mode 100644
-index 0000000..ce58044
+index 0000000..69b2573
 --- /dev/null
 +++ b/user/dummyproc.c
-@@ -0,0 +1,33 @@
+@@ -0,0 +1,34 @@
 +#include "kernel/types.h"
 +#include "kernel/stat.h"
 +#include "user/user.h"
++
++int dummy_arr[200];
 +
 +int
 +main(int argc, char* argv[])
@@ -623,15 +635,14 @@ index 0000000..ce58044
 +    fork();
 +    fork();
 +    fork();
-+    fork();
 +
-+    int j = 2;
++    // printf("started\n");
 +
-+    for (int i = 1; i <= 1000000000; i++) {
-+        j++;
++    for (int i = 1; i <= 100000000; i++) {
++        dummy_arr[i % 200]++;
 +    }
 +
-+    j--;
++    // printf("ended\n");
 +
 +    exit(0);
 +}
