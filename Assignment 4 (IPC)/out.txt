@@ -1,0 +1,58 @@
+Student 4 has arrived at print station 1 at time 3
+Student 15 has arrived at print station 4 at time 4
+Student 2 has arrived at print station 3 at time 1002
+Student 9 has arrived at print station 2 at time 1003
+Stuff 2 has started reading the entry book at time 9001. No. of submission = 0
+Student 4 has finished printing at time 10003
+Student 8 has arrived at print station 1 at time 10004
+Student 15 has finished printing at time 10005
+Student 11 has arrived at print station 4 at time 10005
+Stuff 1 has started reading the entry book at time 11001. No. of submission = 0
+Student 2 has finished printing at time 11002
+Student 6 has arrived at print station 3 at time 11003
+Student 9 has finished printing at time 11004
+Student 1 has arrived at print station 2 at time 11004
+Stuff 2 has finished reading the entry book at time 12002. No. of submission = 0
+Stuff 1 has finished reading the entry book at time 14002. No. of submission = 0
+Student 8 has finished printing at time 20005
+Student 12 has arrived at print station 1 at time 20005
+Student 11 has finished printing at time 20006
+Student 3 has arrived at print station 4 at time 20006
+Student 6 has finished printing at time 21004
+Student 10 has arrived at print station 3 at time 21004
+Student 1 has finished printing at time 21005
+Student 5 has arrived at print station 2 at time 21005
+Stuff 2 has started reading the entry book at time 22002. No. of submission = 0
+Stuff 1 has started reading the entry book at time 25002. No. of submission = 0
+Stuff 2 has finished reading the entry book at time 25003. No. of submission = 0
+Stuff 1 has finished reading the entry book at time 28003. No. of submission = 0
+Student 12 has finished printing at time 30006
+Student 3 has finished printing at time 30007
+Student 7 has arrived at print station 4 at time 30007
+Student 10 has finished printing at time 31005
+Student 14 has arrived at print station 3 at time 31005
+Student 5 has finished printing at time 31006
+Student 13 has arrived at print station 2 at time 31006
+Group 1 has finished printing at time 31007
+Group 1 has started binding at time 31007
+Stuff 2 has started reading the entry book at time 36004. No. of submission = 0
+Stuff 1 has started reading the entry book at time 38004. No. of submission = 0
+Stuff 2 has finished reading the entry book at time 39004. No. of submission = 0
+Group 1 has finished binding at time 39008
+Student 7 has finished printing at time 40008
+Group 2 has finished printing at time 40009
+Group 2 has started binding at time 40009
+Stuff 1 has finished reading the entry book at time 41004. No. of submission = 0
+Group 1 has submitted the report at time 41005
+Student 14 has finished printing at time 41006
+Student 13 has finished printing at time 41007
+Group 3 has finished printing at time 41008
+Group 3 has started binding at time 41008
+Group 2 has finished binding at time 48010
+Group 2 has submitted the report at time 48011
+Group 3 has finished binding at time 49009
+Group 3 has submitted the report at time 49009
+Stuff 2 has started reading the entry book at time 51005. No. of submission = 3
+Stuff 1 has started reading the entry book at time 53005. No. of submission = 3
+Stuff 2 has finished reading the entry book at time 54006. No. of submission = 3
+Stuff 1 has finished reading the entry book at time 56006. No. of submission = 3

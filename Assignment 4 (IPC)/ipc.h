@@ -20,9 +20,10 @@ struct Student {
 };
 
 struct Printer {
-  public:
-    int printer_id;
-    enum State { IDLE, BUSY } state;
+ public:
+  int printer_id;
+  enum State { IDLE, BUSY } state;
+
   Printer(int pid);
 };
 
@@ -43,15 +44,26 @@ struct Random {
   std::poisson_distribution<int> distribution;
 
  public:
-  Random(int mean);
+  Random(int mean = 5);
   long next();
+};
+
+struct Stuff {
+ public:
+  Random rnd;
+  int stuff_id;
+  pthread_t thread;
+
+  Stuff(int sid);
+  void start_thread();
 };
 
 int64_t calculate_time();
 void *student_thread(void *arg);
-void obtain_printer(Student& st, Printer& pr);
-void leave_printer(Student& st, Printer& pr);
-void test(Student &st, Printer& pr);
+void obtain_printer(Student &st, Printer &pr);
+void leave_printer(Student &st, Printer &pr);
+void test(Student &st, Printer &pr);
 void *group_thread(void *arg);
+void *stuff_thread(void *arg);
 
 #endif
