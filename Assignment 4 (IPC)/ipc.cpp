@@ -29,23 +29,22 @@ void Student::start_thread() {
 }
 
 void *student_thread(void *arg) {
-  int *sid = (int *)arg;
-  Student std = students[*sid - 1];
-  // cout << "Thread has been created for student id " << std.student_id <<
+  int sid = *(int *)arg;
+  // cerr << "Thread has been created for student id " << std.student_id <<
   // endl;
 
-  int pid = std.student_id % N_PRINTER + 1;
+  int pid = sid % N_PRINTER + 1;
   long wait_time = rnd.next();
   sleep(wait_time);
-  obtain_printer(std, pid);
-  cout << "Student " << *sid << " arrives at print station " << pid
+  obtain_printer(students[sid - 1], pid);
+  cout << "Student " << sid << " arrives at print station " << pid
        << " at time " << calculate_time() << endl;
   sleep(PRINTING_TIME);
-  cout << "Student " << *sid << " leaves print station " << pid << " at time "
+  cout << "Student " << sid << " leaves print station " << pid << " at time "
        << calculate_time() << endl;
-  leave_printer(std, pid);
+  leave_printer(students[sid - 1], pid);
 
-  // cout << "Exiting thread for student id " << std.student_id << endl;
+  // cerr << "Exiting thread for student id " << std.student_id << endl;
   return NULL;
 }
 
@@ -69,39 +68,40 @@ void obtain_printer(Student &st, int pid) {
   st.state = Student::IDLE;
   test(st, pid);
   sem_post(&printing_mutex);
-  // cerr << "Waiting for printer " << pid << " for student " << st.student_id
-  //      << endl;
   sem_wait(&st.semaphore);
-  // cerr << "Obtained printer " << pid << " for student " << st.student_id
-  //      << endl;
 }
 void leave_printer(Student &st, int pid) {
   sem_wait(&printing_mutex);
   st.state = Student::DONE;
   printers[pid - 1] = P_STATE::IDLE;
-  int mod = st.student_id % N_PRINTER + 1;
-  Group g = groups[st.group_id - 1];
-  for (int i = g.from; i <= g.to; i++) {
-    int this_pid = i % N_PRINTER + 1;
-    if (pid == this_pid) test(students[i - 1], this_pid);
+
+  int sid = (pid + N_PRINTER - 2) % N_PRINTER + 1;
+  while (sid <= N_STUDENT) {  // groupmates first
+    if (students[sid - 1].group_id == st.group_id &&
+        students[sid - 1].state == Student::IDLE)
+      test(students[sid - 1], pid);
+    sid += N_PRINTER;
   }
-  for (int i = mod; i <= N_STUDENT; i += N_PRINTER) {
-    if (students[i - 1].group_id == st.group_id) continue;  // already notified
-    test(students[i - 1], pid);
+
+  sid = (pid + N_PRINTER - 2) % N_PRINTER + 1;
+  while (sid <= N_STUDENT) {
+    if (students[sid - 1].state == Student::IDLE) test(students[sid - 1], pid);
+    sid += N_PRINTER;
   }
+
   sem_post(&printing_mutex);
 }
 
 void test(Student &student, int pid) {
-  cerr << "Testing for student " << student.student_id << " and printer " << pid
-       << " S " << (student.state == Student::IDLE ? "IDLE" : "BUSY") << " P "
-       << (printers[pid - 1] == P_STATE::IDLE ? "IDLE" : "BUSY") << endl;
+  // cerr << "Testing for student " << student.student_id << " and printer " <<
+  // pid
+  //      << " S " << (student.state == Student::IDLE ? "IDLE" : "BUSY") << " P
+  //      "
+  //      << (printers[pid - 1] == P_STATE::IDLE ? "IDLE" : "BUSY") << endl;
   if (student.state == Student::IDLE && printers[pid - 1] == P_STATE::IDLE) {
     student.state = Student::PRINTING;
     printers[pid - 1] = P_STATE::BUSY;
     sem_post(&student.semaphore);
-    cerr << "Let student " << student.student_id << " print at printer " << pid
-         << endl;
   }
 }
 

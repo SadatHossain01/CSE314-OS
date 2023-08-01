@@ -36,6 +36,7 @@ int main() {
   for (auto &student : students) {
     student.start_thread();
   }
-
-  while (1);
+  for (auto &student : students) {
+    pthread_join(student.thread, NULL);
+  }
 }
