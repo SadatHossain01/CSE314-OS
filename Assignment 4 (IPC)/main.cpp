@@ -7,20 +7,28 @@
 
 using namespace std;
 
-int N_PRINTER = 4;
-int N_STUDENT, SZ_GROUP, PRINTING_TIME, BINDING_TIME, RW_TIME;
+int N_PRINTER = 4, N_BINDING_STATION = 2;
 int N_GROUP;
+
+int N_STUDENT, SZ_GROUP, PRINTING_TIME, BINDING_TIME, RW_TIME;
+
 vector<Student> students;
 vector<Printer> printers;
 vector<Group> groups;
 sem_t printing_mutex;
+sem_t bs_semaphore;  // binding station
 
 Random rnd(2);
 chrono::high_resolution_clock::time_point start_time;
 
+void init_semaphores() {
+  sem_init(&printing_mutex, 0, 1);
+  sem_init(&bs_semaphore, 0, N_BINDING_STATION);
+}
+
 int main() {
   start_time = chrono::high_resolution_clock::now();
-  sem_init(&printing_mutex, 0, 1);
+  init_semaphores();
 
   cin >> N_STUDENT >> SZ_GROUP >> PRINTING_TIME >> BINDING_TIME >> RW_TIME;
   N_GROUP = (N_STUDENT + SZ_GROUP - 1) / SZ_GROUP;
@@ -39,7 +47,12 @@ int main() {
   for (auto &student : students) {
     student.start_thread();
   }
-  for (auto &student : students) {
-    pthread_join(student.thread, NULL);
+
+  for (auto &group : groups) {
+    group.start_thread();
+  }
+
+  for (auto &group : groups) {
+    pthread_join(group.thread, NULL);
   }
 }

@@ -11,7 +11,7 @@ extern int N_STUDENT;
 extern int SZ_GROUP;
 extern int PRINTING_TIME, BINDING_TIME, RW_TIME;
 extern Random rnd;
-extern sem_t printing_mutex;
+extern sem_t printing_mutex, bs_semaphore;
 extern vector<Student> students;
 extern vector<Printer> printers;
 extern vector<Group> groups;
@@ -35,10 +35,10 @@ void *student_thread(void *arg) {
   long wait_time = rnd.next();
   sleep(wait_time);
   obtain_printer(students[sid - 1], printers[pid - 1]);
-  cout << "Student " << sid << " arrives at print station " << pid
+  cout << "Student " << sid << " has arrived at print station " << pid
        << " at time " << calculate_time() << endl;
   sleep(PRINTING_TIME);
-  cout << "Student " << sid << " leaves print station " << pid << " at time "
+  cout << "Student " << sid << " has finished printing at time "
        << calculate_time() << endl;
   leave_printer(students[sid - 1], printers[pid - 1]);
 
@@ -55,6 +55,32 @@ Group::Group(int from, int to) {
   this->to = to;
   this->group_id = (from - 1) / SZ_GROUP + 1;
   this->group_leader = to;
+}
+
+void Group::start_thread() {
+  pthread_create(&this->thread, NULL, group_thread, &this->group_id);
+}
+
+void *group_thread(void *arg) {
+  int gid = *(int *)arg;
+  Group group = groups[gid - 1];
+
+  for (int i = group.from; i <= group.to; i++) {
+    pthread_join(students[i - 1].thread, NULL);
+  }
+
+  cout << "Group " << gid << " has finished printing at time "
+       << calculate_time() << endl;
+
+  sem_wait(&bs_semaphore);
+  cout << "Group " << gid << " has started binding at time " << calculate_time()
+       << endl;
+  sleep(BINDING_TIME);
+  cout << "Group " << gid << " has finished binding at time "
+       << calculate_time() << endl;
+  sem_post(&bs_semaphore);
+
+  return NULL;
 }
 
 Random::Random(int mean) {

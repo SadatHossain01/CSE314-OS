@@ -31,8 +31,10 @@ struct Group {
   int group_leader;
   int from, to;
   int group_id;
+  pthread_t thread;
 
   Group(int from, int to);
+  void start_thread();
 };
 
 struct Random {
@@ -46,9 +48,10 @@ struct Random {
 };
 
 int64_t calculate_time();
-void *student_thread(void *student);
+void *student_thread(void *arg);
 void obtain_printer(Student& st, Printer& pr);
 void leave_printer(Student& st, Printer& pr);
 void test(Student &st, Printer& pr);
+void *group_thread(void *arg);
 
 #endif
