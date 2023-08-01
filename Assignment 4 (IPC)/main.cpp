@@ -11,7 +11,7 @@ int N_PRINTER = 4;
 int N_STUDENT, SZ_GROUP, PRINTING_TIME, BINDING_TIME, RW_TIME;
 int N_GROUP;
 vector<Student> students;
-vector<P_STATE> printers(N_PRINTER, IDLE);
+vector<Printer> printers;
 vector<Group> groups;
 sem_t printing_mutex;
 
@@ -25,6 +25,9 @@ int main() {
   cin >> N_STUDENT >> SZ_GROUP >> PRINTING_TIME >> BINDING_TIME >> RW_TIME;
   N_GROUP = (N_STUDENT + SZ_GROUP - 1) / SZ_GROUP;
 
+  for (int i = 1; i <= N_PRINTER; i++) {
+    printers.push_back(Printer(i));
+  }
   for (int i = 1; i <= N_STUDENT; i++) {
     students.push_back(Student(i));
   }

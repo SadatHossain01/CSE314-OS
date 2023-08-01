@@ -19,6 +19,13 @@ struct Student {
   void start_thread();
 };
 
+struct Printer {
+  public:
+    int printer_id;
+    enum State { IDLE, BUSY } state;
+  Printer(int pid);
+};
+
 struct Group {
  public:
   int group_leader;
@@ -27,8 +34,6 @@ struct Group {
 
   Group(int from, int to);
 };
-
-enum P_STATE { IDLE, BUSY };
 
 struct Random {
  private:
@@ -42,8 +47,8 @@ struct Random {
 
 int64_t calculate_time();
 void *student_thread(void *student);
-void obtain_printer(Student& st, int pid);
-void leave_printer(Student& st, int pid);
-void test(Student &st, int pid);
+void obtain_printer(Student& st, Printer& pr);
+void leave_printer(Student& st, Printer& pr);
+void test(Student &st, Printer& pr);
 
 #endif
