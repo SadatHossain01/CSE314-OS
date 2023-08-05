@@ -2,6 +2,7 @@
 
 #include <unistd.h>
 
+#include <cassert>
 #include <chrono>
 #include <iostream>
 #include <vector>
@@ -16,6 +17,7 @@ extern vector<Group> groups;
 extern vector<Student> students;
 extern vector<Stuff> stuffs;
 
+extern sem_t output_mutex;
 extern sem_t printing_mutex;
 extern sem_t bs_semaphore;
 
@@ -46,11 +48,11 @@ void *student_thread(void *arg) {
   sleep(wait_time);
 
   // printing (dining philosopher problem)
+  print(STUDENT_ARRIVAL, sid, pid);
   obtain_printer(students[sid - 1], printers[pid - 1]);
-  cout << "Student " << sid << " has arrived at print station " << pid << " at time "
-       << calculate_time() << endl;
+  print(STUDENT_PRINTING_START, sid);
   sleep(PRINTING_TIME);
-  cout << "Student " << sid << " has finished printing at time " << calculate_time() << endl;
+  print(STUDENT_PRINTING_FINISH, sid);
   leave_printer(students[sid - 1], printers[pid - 1]);
 
   Group group = groups[students[sid - 1].group_id - 1];
@@ -62,19 +64,21 @@ void *student_thread(void *arg) {
     pthread_join(students[i - 1].thread, NULL);  // wait for all members to
                                                  // finish printing
   }
-  cout << "Group " << gid << " has finished printing at time " << calculate_time() << endl;
+  print(GROUP_PRINTING_FINISH, gid);
 
   // binding
   sem_wait(&bs_semaphore);
-  cout << "Group " << gid << " has started binding at time " << calculate_time() << endl;
+  print(GROUP_BINDING_START, gid);
   sleep(BINDING_TIME);
-  cout << "Group " << gid << " has finished binding at time " << calculate_time() << endl;
+  print(GROUP_BINDING_FINISH, gid);
   sem_post(&bs_semaphore);
 
   // submission (writing)
   sem_wait(&submission_mutex);  // need exclusive access to write
   n_submissions++;
-  cout << "Group " << gid << " has submitted the report at time " << calculate_time() << endl;
+  print(GROUP_SUBMISSION_START, gid);
+  sleep(RW_TIME);
+  print(GROUP_SUBMISSION_FINISH, gid);
   sem_post(&submission_mutex);  // release exclusive access
 
   return NULL;
@@ -116,12 +120,10 @@ void *stuff_thread(void *arg) {
     if (n_readers == 1)
       sem_wait(&submission_mutex);  // need exclusive access for all readers together
     sem_post(&rc_mutex);
-    cout << "Stuff " << sid << " has started reading the entry book at time " << calculate_time()
-         << ". No. of submission = " << n_submissions << endl;
+    print(STUFF_READING_START, sid, n_submissions);
     sleep(RW_TIME);
     if (n_submissions == N_GROUP) cont = false;
-    cout << "Stuff " << sid << " has finished reading the entry book at time " << calculate_time()
-         << ". No. of submission = " << n_submissions << endl;
+    print(STUFF_READING_FINISH, sid, n_submissions);
     sem_wait(&rc_mutex);
     n_readers--;
     if (n_readers == 0) sem_post(&submission_mutex);  // release exclusive access
@@ -141,7 +143,7 @@ long Random::next() { return this->distribution(this->generator); }
 // Dining Philosopher Problem
 void obtain_printer(Student &st, Printer &pr) {
   sem_wait(&printing_mutex);
-  st.state = Student::IDLE;
+  st.state = Student::WAITING;
   test(st, pr);
   sem_post(&printing_mutex);
   sem_wait(&st.semaphore);
@@ -153,21 +155,21 @@ void leave_printer(Student &st, Printer &pr) {
 
   int sid = (pr.printer_id + N_PRINTER - 2) % N_PRINTER + 1;
   while (sid <= N_STUDENT) {  // groupmates first
-    if (students[sid - 1].group_id == st.group_id && students[sid - 1].state == Student::IDLE)
+    if (students[sid - 1].group_id == st.group_id && students[sid - 1].state == Student::WAITING)
       test(students[sid - 1], pr);
     sid += N_PRINTER;
   }
 
   sid = (pr.printer_id + N_PRINTER - 2) % N_PRINTER + 1;
   while (sid <= N_STUDENT) {  // then others
-    if (students[sid - 1].state == Student::IDLE) test(students[sid - 1], pr);
+    if (students[sid - 1].state == Student::WAITING) test(students[sid - 1], pr);
     sid += N_PRINTER;
   }
 
   sem_post(&printing_mutex);
 }
 void test(Student &student, Printer &pr) {
-  if (student.state == Student::IDLE && pr.state == Printer::IDLE) {
+  if (student.state == Student::WAITING && pr.state == Printer::IDLE) {
     student.state = Student::PRINTING;
     pr.state = Printer::BUSY;
     sem_post(&student.semaphore);
@@ -178,4 +180,58 @@ int64_t calculate_time() {
   auto end_time = chrono::high_resolution_clock::now();
   auto duration = chrono::duration_cast<chrono::milliseconds>(end_time - start_time).count();
   return duration;
+}
+
+void print(const string &msg) {
+  sem_wait(&output_mutex);
+  cout << msg << endl;
+  sem_post(&output_mutex);
+}
+
+void print(Output_Type type, int id, int var) {
+  int64_t time = calculate_time();
+
+  sem_wait(&output_mutex);
+  switch (type) {
+    case STUDENT_ARRIVAL:
+      assert(var != -1);
+      cout << "Student " << id << " has arrived at print station " << var << " at time " << time
+           << endl;
+      break;
+    case STUDENT_PRINTING_START:
+      cout << "Student " << id << " has started printing at time " << time << endl;
+      break;
+    case STUDENT_PRINTING_FINISH:
+      cout << "Student " << id << " has finished printing at time " << time << endl;
+      break;
+    case GROUP_PRINTING_FINISH:
+      cout << "Group " << id << " has finished printing at time " << time << endl;
+      break;
+    case GROUP_BINDING_START:
+      cout << "Group " << id << " has started binding at time " << time << endl;
+      break;
+    case GROUP_BINDING_FINISH:
+      cout << "Group " << id << " has finished binding at time " << time << endl;
+      break;
+    case GROUP_SUBMISSION_START:
+      cout << "Group " << id << " has started submitting the report at time " << time << endl;
+      break;
+    case GROUP_SUBMISSION_FINISH:
+      cout << "Group " << id << " has submitted the report at time " << time << endl;
+      break;
+    case STUFF_READING_START:
+      assert(var != -1);
+      cout << "Stuff " << id << " has started reading the entry book at time " << time
+           << ". No. of submission = " << var << endl;
+      break;
+    case STUFF_READING_FINISH:
+      assert(var != -1);
+      cout << "Stuff " << id << " has finished reading the entry book at time " << time
+           << ". No. of submission = " << var << endl;
+      break;
+    default:
+      assert(false);
+      break;
+  }
+  sem_post(&output_mutex);
 }

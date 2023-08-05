@@ -10,6 +10,8 @@ using namespace std;
 chrono::high_resolution_clock::time_point start_time;
 Random rnd(2);
 
+sem_t output_mutex;
+
 int N_PRINTER = 4, N_BINDING_STATION = 2, N_STUFFS = 2, N_GROUP;
 int N_STUDENT, SZ_GROUP, PRINTING_TIME, BINDING_TIME, RW_TIME;
 
@@ -30,9 +32,11 @@ void init_semaphores() {
   sem_init(&bs_semaphore, 0, N_BINDING_STATION);
   sem_init(&rc_mutex, 0, 1);
   sem_init(&submission_mutex, 0, 1);
+  sem_init(&output_mutex, 0, 1);
 }
 
-// g++ -std=c++14 -O3 -g -fsanitize=address ipc.cpp main.cpp && ./a.out
+// g++ -std=c++14 -O3 ipc.cpp main.cpp
+// g++ -std=c++14 -O3 ipc.cpp main.cpp -lpthread -o main
 int main() {
   start_time = chrono::high_resolution_clock::now();
   init_semaphores();

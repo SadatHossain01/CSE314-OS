@@ -13,7 +13,7 @@ struct Student {
   int student_id;
   pthread_t thread;
   sem_t semaphore;
-  enum State { IDLE, PRINTING, DONE } state;
+  enum State { IDLE, WAITING, PRINTING, DONE } state;
 
   Student(int sid);
   void start_thread();
@@ -63,5 +63,21 @@ void leave_printer(Student &st, Printer &pr);
 void test(Student &st, Printer &pr);
 void *group_thread(void *arg);
 void *stuff_thread(void *arg);
+void print(const string &msg);
+enum Output_Type {
+  STUDENT_ARRIVAL,
+  STUDENT_PRINTING_START,
+  STUDENT_PRINTING_FINISH,
+  GROUP_PRINTING_FINISH,
+  GROUP_BINDING_START,
+  GROUP_BINDING_FINISH,
+  GROUP_SUBMISSION_START,
+  GROUP_SUBMISSION_FINISH,
+  STUFF_READING_START,
+  STUFF_READING_FINISH
+};
+// id can be student_id, group_id, or stuff_id whichever relevant
+// var is optional, may be printer_id or no_of_submissions
+void print(Output_Type type, int id, int var = -1);
 
 #endif
