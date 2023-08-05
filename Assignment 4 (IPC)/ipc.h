@@ -32,10 +32,8 @@ struct Group {
   int group_leader;
   int from, to;
   int group_id;
-  pthread_t thread;
 
   Group(int from, int to);
-  void start_thread();
 };
 
 struct Random {

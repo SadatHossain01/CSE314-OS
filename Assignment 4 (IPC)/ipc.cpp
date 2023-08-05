@@ -11,17 +11,15 @@ extern Random rnd;
 
 extern int N_PRINTER, N_STUDENT, SZ_GROUP, N_GROUP, PRINTING_TIME, BINDING_TIME, RW_TIME;
 
-// Task 1 : Printing
-extern sem_t printing_mutex;
 extern vector<Printer> printers;
-extern vector<Student> students;
-
-// Task 2 : Binding
-extern sem_t bs_semaphore;
 extern vector<Group> groups;
-
-// Task 3 : Submission & Stuffs
+extern vector<Student> students;
 extern vector<Stuff> stuffs;
+
+extern sem_t printing_mutex;
+extern sem_t bs_semaphore;
+
+// Submission & Stuffs
 extern int n_submissions, n_readers;
 extern sem_t rc_mutex;          // rc_mutex controls access to shared_variable n_readers
 extern sem_t submission_mutex;  // submission_mutex controls access to
@@ -36,7 +34,8 @@ Student::Student(int sid) {
 
 void Student::start_thread() {
   pthread_create(&this->thread, NULL, student_thread,
-                 &this->student_id);  // will handle individual printing
+                 &this->student_id);  // will handle printing, leaders' ones will also handle
+                                      // binding and submission
 }
 
 void *student_thread(void *arg) {
@@ -54,32 +53,12 @@ void *student_thread(void *arg) {
   cout << "Student " << sid << " has finished printing at time " << calculate_time() << endl;
   leave_printer(students[sid - 1], printers[pid - 1]);
 
-  return NULL;
-}
-
-Printer::Printer(int pid) {
-  this->printer_id = pid;
-  this->state = IDLE;
-}
-
-Group::Group(int from, int to) {
-  this->from = from;
-  this->to = to;
-  this->group_id = (from - 1) / SZ_GROUP + 1;
-  this->group_leader = to;
-}
-
-void Group::start_thread() {
-  pthread_create(&this->thread, NULL, group_thread,
-                 &this->group_id);  // will first run until all members are done
-                                    // printing, then binding, then submission
-}
-
-void *group_thread(void *arg) {
-  int gid = *(int *)arg;
-  Group group = groups[gid - 1];
+  Group group = groups[students[sid - 1].group_id - 1];
+  int gid = group.group_id;
+  if (sid != group.group_leader) return NULL;  // only group leader will do binding and submission
 
   for (int i = group.from; i <= group.to; i++) {
+    if (i == sid) continue;                      // skip group leader
     pthread_join(students[i - 1].thread, NULL);  // wait for all members to
                                                  // finish printing
   }
@@ -99,6 +78,18 @@ void *group_thread(void *arg) {
   sem_post(&submission_mutex);  // release exclusive access
 
   return NULL;
+}
+
+Printer::Printer(int pid) {
+  this->printer_id = pid;
+  this->state = IDLE;
+}
+
+Group::Group(int from, int to) {
+  this->from = from;
+  this->to = to;
+  this->group_id = (from - 1) / SZ_GROUP + 1;
+  this->group_leader = to;
 }
 
 Stuff::Stuff(int sid) {
