@@ -1,5 +1,5 @@
 diff --git a/Makefile b/Makefile
-index 39a99d7..35c1c10 100644
+index 39a99d7..c03f06f 100644
 --- a/Makefile
 +++ b/Makefile
 @@ -87,7 +87,7 @@ $U/initcode: $U/initcode.S
@@ -7,7 +7,7 @@ index 39a99d7..35c1c10 100644
  	etags *.S *.c
  
 -ULIB = $U/ulib.o $U/usys.o $U/printf.o $U/umalloc.o
-+ULIB = $U/ulib.o $U/usys.o $U/printf.o $U/umalloc.o $U/thread_spinlock.o $U/thread_mutex.o $U/thread_condvar.o $U/thread_sem.o
++ULIB = $U/ulib.o $U/usys.o $U/printf.o $U/umalloc.o $U/thread_spinlock.o $U/thread_mutex.o $U/queue.o $U/thread_condvar.o $U/thread_sem.o
  
  _%: %.o $(ULIB)
  	$(LD) $(LDFLAGS) -T $U/user.ld -o $@ $^
@@ -839,13 +839,14 @@ index 9f69783..64012e1 100644
 +}
 diff --git a/user/prodcon.c b/user/prodcon.c
 new file mode 100644
-index 0000000..a02d40c
+index 0000000..74cdacc
 --- /dev/null
 +++ b/user/prodcon.c
 @@ -0,0 +1,133 @@
 +#include "kernel/types.h"
 +#include "kernel/stat.h"
 +#include "user/user.h"
++#include "user/queue.h"
 +#include "user/thread_mutex.h"
 +#include "user/thread_condvar.h"
 +#include "user/thread_sem.h"
@@ -923,7 +924,6 @@ index 0000000..a02d40c
 +        // post semaphore full
 +        thread_sem_post(&full);
 +    }
-+
 +    thread_exit();
 +}
 +
@@ -976,41 +976,89 @@ index 0000000..a02d40c
 +
 +    exit(0);
 +}
+diff --git a/user/queue.c b/user/queue.c
+new file mode 100644
+index 0000000..d4cfc28
+--- /dev/null
++++ b/user/queue.c
+@@ -0,0 +1,27 @@
++#include "user/queue.h"
++
++void my_queue_init(struct my_queue *q)
++{
++    q->front = 0;
++    q->rear = 0;
++    q->size = 0;
++}
++
++int* my_push(struct my_queue *q, int x)
++{
++    q->arr[q->rear] = x;
++    int* ret = &(q->arr[q->rear]);
++    q->rear = (q->rear + 1) % 100;
++    q->size++;
++    return ret;
++}
++
++int* my_pop(struct my_queue *q)
++{
++    if (q->size == 0)
++        return 0;
++    int* ret = &(q->arr[q->front]);
++    q->front = (q->front + 1) % 100;
++    q->size--;
++    return ret;
++}
+\ No newline at end of file
+diff --git a/user/queue.h b/user/queue.h
+new file mode 100644
+index 0000000..3f8fc5b
+--- /dev/null
++++ b/user/queue.h
+@@ -0,0 +1,9 @@
++struct my_queue
++{
++    int arr[100];
++    int front, rear, size;
++};
++
++void my_queue_init(struct my_queue *q);
++int* my_push(struct my_queue *q, int x);
++int* my_pop(struct my_queue *q);
+\ No newline at end of file
 diff --git a/user/thread_condvar.c b/user/thread_condvar.c
 new file mode 100644
-index 0000000..9ffefef
+index 0000000..633724a
 --- /dev/null
 +++ b/user/thread_condvar.c
-@@ -0,0 +1,53 @@
+@@ -0,0 +1,42 @@
 +#include "kernel/types.h"
 +#include "user/user.h"
 +#include "user/thread_mutex.h"
++#include "user/queue.h"
 +#include "user/thread_condvar.h"
 +
 +void
 +thread_cond_init(struct thread_condvar *cv)
 +{
-+  cv->signal = 0;
++    my_queue_init(&cv->wait_queue);
 +}
 +
 +void
 +thread_cond_wait(struct thread_condvar *cv, struct thread_mutex* m)
 +{
-+    // __sync_fetch_and_and(T* __p, U __v) performs an atomic bitwise
-+    // AND operation on the variable __v with the variable that __p
-+    // points to. The result is stored in the address that is specified by __p.
-+    __sync_fetch_and_and(&cv->signal, 0);
-+	// signal reset so can now unlock mutex, any calls to signal
-+	// after this point will wakeup
++    int* ptr = my_push(&cv->wait_queue, 0); // add to wait queue
++	// ptr reset so can now unlock mutex, 
++    // any calls to signal() after this point 
++    // will wake it up
 +	thread_mutex_unlock(m);
 +
-+	while(__sync_bool_compare_and_swap(&cv->signal, 0, 0)) {
-+        // check cv->signal for 0, if 0 then wait for signal
-+		twait(&cv->signal, 0);
++	while(__sync_bool_compare_and_swap(ptr, 0, 0)) {
++        // check *ptr for 0, if 0 then wait for signal
++		twait(ptr, 0);
 +	}
 +
-+    // cv->signal is now 1
-+
++    // *ptr is now 1
 +	thread_mutex_lock(m);
 +}
 +
@@ -1019,44 +1067,34 @@ index 0000000..9ffefef
 +{
 +    __sync_synchronize();
 +
-+    // if already not set, set cv->signal to 1
-+    __sync_bool_compare_and_swap(&cv->signal, 0, 1);
++    int *ptr = my_pop(&cv->wait_queue); // remove from wait queue
++    if (ptr == 0)
++        return;
++    __sync_bool_compare_and_swap(ptr, 0, 1);
 +
-+    twake(&cv->signal, 1); // wake up 1 thread only
-+}
-+
-+void
-+thread_cond_broadcast(struct thread_condvar *cv)
-+{
-+    __sync_synchronize();
-+
-+    // if already not set, set cv->signal to 1
-+    __sync_bool_compare_and_swap(&cv->signal, 0, 1);
-+
-+    twake(&cv->signal, 100); // broadcast to all relevant threads (hence 100 > NPROC)
++    twake(ptr, 1); // wake up 1 thread only
 +}
 \ No newline at end of file
 diff --git a/user/thread_condvar.h b/user/thread_condvar.h
 new file mode 100644
-index 0000000..0d3ea39
+index 0000000..1878145
 --- /dev/null
 +++ b/user/thread_condvar.h
-@@ -0,0 +1,8 @@
+@@ -0,0 +1,7 @@
 +struct thread_condvar {
-+    int signal;
++    struct my_queue wait_queue;
 +};
 +
 +void thread_cond_init(struct thread_condvar *);
 +void thread_cond_wait(struct thread_condvar *, struct thread_mutex *);
 +void thread_cond_signal(struct thread_condvar *);
-+void thread_cond_broadcast(struct thread_condvar *);
 \ No newline at end of file
 diff --git a/user/thread_mutex.c b/user/thread_mutex.c
 new file mode 100644
-index 0000000..bee196f
+index 0000000..25182b7
 --- /dev/null
 +++ b/user/thread_mutex.c
-@@ -0,0 +1,56 @@
+@@ -0,0 +1,50 @@
 +#include "kernel/types.h"
 +#include "user/user.h"
 +#include "user/thread_mutex.h"
@@ -1065,7 +1103,6 @@ index 0000000..bee196f
 +thread_mutex_init(struct thread_mutex *lk)
 +{
 +  lk->locked = 0;
-+  lk->proc = 0;
 +}
 +
 +// Acquire the lock.
@@ -1085,17 +1122,12 @@ index 0000000..bee196f
 +  // references happen strictly after the lock is acquired.
 +  // On RISC-V, this emits a fence instruction.
 +  __sync_synchronize();
-+
-+  // Record info about lock acquisition for holding() and debugging.
-+  lk->proc = getpid();
 +}
 +
 +// Release the lock.
 +void
 +thread_mutex_unlock(struct thread_mutex *lk)
 +{
-+  lk->proc = 0;
-+
 +  // Tell the C compiler and the CPU to not move loads or stores
 +  // past this point, to ensure that all the stores in the critical
 +  // section are visible to other CPUs before the lock is released,
@@ -1116,16 +1148,13 @@ index 0000000..bee196f
 \ No newline at end of file
 diff --git a/user/thread_mutex.h b/user/thread_mutex.h
 new file mode 100644
-index 0000000..ad07bb8
+index 0000000..f1dea40
 --- /dev/null
 +++ b/user/thread_mutex.h
-@@ -0,0 +1,11 @@
+@@ -0,0 +1,8 @@
 +// Mutual exclusion lock.
 +struct thread_mutex {
 +  uint locked;       // Is the lock held?
-+
-+  // For debugging:
-+  int proc;           // The process holding lock
 +};
 +
 +void thread_mutex_init(struct thread_mutex*);
@@ -1134,13 +1163,14 @@ index 0000000..ad07bb8
 \ No newline at end of file
 diff --git a/user/thread_sem.c b/user/thread_sem.c
 new file mode 100644
-index 0000000..22e349b
+index 0000000..314bbbc
 --- /dev/null
 +++ b/user/thread_sem.c
-@@ -0,0 +1,36 @@
+@@ -0,0 +1,37 @@
 +#include "kernel/types.h"
 +#include "user/user.h"
 +#include "user/thread_mutex.h"
++#include "user/queue.h"
 +#include "user/thread_condvar.h"
 +#include "user/thread_sem.h"
 +
@@ -1193,10 +1223,10 @@ index 0000000..0730296
 \ No newline at end of file
 diff --git a/user/thread_spinlock.c b/user/thread_spinlock.c
 new file mode 100644
-index 0000000..94774db
+index 0000000..24e54d0
 --- /dev/null
 +++ b/user/thread_spinlock.c
-@@ -0,0 +1,56 @@
+@@ -0,0 +1,50 @@
 +#include "kernel/types.h"
 +#include "user/user.h"
 +#include "user/thread_spinlock.h"
@@ -1205,7 +1235,6 @@ index 0000000..94774db
 +thread_spin_init(struct thread_spinlock *lk)
 +{
 +  lk->locked = 0;
-+  lk->proc = 0;
 +}
 +
 +// Acquire the lock.
@@ -1225,17 +1254,12 @@ index 0000000..94774db
 +  // references happen strictly after the lock is acquired.
 +  // On RISC-V, this emits a fence instruction.
 +  __sync_synchronize();
-+
-+  // Record info about lock acquisition for holding() and debugging.
-+  lk->proc = getpid();
 +}
 +
 +// Release the lock.
 +void
 +thread_spin_unlock(struct thread_spinlock *lk)
 +{
-+  lk->proc = 0;
-+
 +  // Tell the C compiler and the CPU to not move loads or stores
 +  // past this point, to ensure that all the stores in the critical
 +  // section are visible to other CPUs before the lock is released,
@@ -1256,16 +1280,13 @@ index 0000000..94774db
 \ No newline at end of file
 diff --git a/user/thread_spinlock.h b/user/thread_spinlock.h
 new file mode 100644
-index 0000000..0855eed
+index 0000000..50db5fa
 --- /dev/null
 +++ b/user/thread_spinlock.h
-@@ -0,0 +1,11 @@
+@@ -0,0 +1,8 @@
 +// Mutual exclusion lock.
 +struct thread_spinlock {
 +  uint locked;       // Is the lock held?
-+
-+  // For debugging:
-+  int proc;           // The process holding lock
 +};
 +
 +void thread_spin_init(struct thread_spinlock*);
