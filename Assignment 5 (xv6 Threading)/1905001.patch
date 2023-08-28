@@ -742,7 +742,7 @@ index 1de184e..433c508 100644
 +}
 \ No newline at end of file
 diff --git a/kernel/vm.c b/kernel/vm.c
-index 9f69783..503c4ca 100644
+index 9f69783..311c18c 100644
 --- a/kernel/vm.c
 +++ b/kernel/vm.c
 @@ -248,6 +248,39 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz, int xperm)
@@ -754,7 +754,7 @@ index 9f69783..503c4ca 100644
 +// child's page table. Do not allocate any
 +// new physical memory. Just add the mappings.
 +// returns 0 on success, -1 on failure.
-+// frees any allocated pages on failure.
++// unmaps the mappings on failure.
 +uint64
 +uvmallocmirror(pagetable_t old, pagetable_t new, uint64 oldsz, uint64 newsz)
 +{
@@ -789,11 +789,11 @@ index 9f69783..503c4ca 100644
    return newsz;
  }
  
-+// Deallocate user pages to bring the process size from oldsz to
++// Remove mappings to bring the process size from oldsz to
 +// newsz, without freeing the physical memory.
 +// oldsz and newsz need not be page-aligned, nor does newsz
-+// need to be less than oldsz.  oldsz can be larger than the actual
-+// process size.  Returns the new process size.
++// need to be less than oldsz. oldsz can be larger than the actual
++// process size. Returns the new process size.
 +uint64
 +uvmdeallocmirror(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
 +{
@@ -820,12 +820,12 @@ index 9f69783..503c4ca 100644
      if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
        kfree(mem);
        goto err;
-@@ -332,6 +384,42 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
+@@ -332,6 +384,39 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
    return -1;
  }
  
 +// Given a parent process's page table, copy
-+// its memory into a child's page table.
++// its mappings into a child's page table.
 +// Do not create any new physical memory.
 +// returns 0 on success, -1 on failure.
 +// frees any allocated pages on failure.
@@ -838,7 +838,7 @@ index 9f69783..503c4ca 100644
 +
 +  for(i = 0; i < sz; i += PGSIZE){
 +    // walk(pagetable, va, alloc) returns the address of the PTE
-+    // in page table pagetable for virtual address va.
++    // in pagetable for virtual address va.
 +    // if alloc != 0, walk() creates any required page-table pages.
 +    if((pte = walk(old, i, 0)) == 0)
 +      panic("uvmcopy: pte should exist");
@@ -846,9 +846,6 @@ index 9f69783..503c4ca 100644
 +      panic("uvmcopy: page not present");
 +    pa = PTE2PA(*pte); // Page Table Entry to Physical Address Translation
 +    flags = PTE_FLAGS(*pte);
-+    // mappages(pagetable, va, size, pa, perm) creates PTEs for virtual
-+    // addresses starting at va referring to physical addresses starting
-+    // at pa in pagetable.
 +    if(mappages(new, i, PGSIZE, pa, flags) != 0){
 +      goto err;
 +    }
@@ -863,7 +860,7 @@ index 9f69783..503c4ca 100644
  // mark a PTE invalid for user access.
  // used by exec for the user stack guard page.
  void
-@@ -437,3 +525,11 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
+@@ -437,3 +522,11 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
      return -1;
    }
  }
@@ -1070,10 +1067,10 @@ index 0000000..3f8fc5b
 \ No newline at end of file
 diff --git a/user/thread_condvar.c b/user/thread_condvar.c
 new file mode 100644
-index 0000000..47ccf52
+index 0000000..22de061
 --- /dev/null
 +++ b/user/thread_condvar.c
-@@ -0,0 +1,42 @@
+@@ -0,0 +1,44 @@
 +#include "kernel/types.h"
 +#include "user/user.h"
 +#include "user/thread_mutex.h"
@@ -1089,10 +1086,12 @@ index 0000000..47ccf52
 +void
 +thread_cond_wait(struct thread_condvar *cv, struct thread_mutex* m)
 +{
-+    int* ptr = my_push(&cv->wait_queue, 0); // add to wait queue
-+	// ptr reset so can now unlock mutex,
++    // add to wait queue, also resetting it to 0
++    int* ptr = my_push(&cv->wait_queue, 0);
++
++	// *ptr reset so can now unlock mutex,
 +    // any calls to signal() after this point
-+    // will wake it up
++    // will wake it up, if called with the same chan
 +	thread_mutex_unlock(m);
 +
 +	while(__sync_bool_compare_and_swap(ptr, 0, 0)) {
@@ -1110,7 +1109,7 @@ index 0000000..47ccf52
 +    __sync_synchronize();
 +
 +    int *ptr = my_pop(&cv->wait_queue); // remove from wait queue
-+    if (ptr == 0)
++    if (ptr == 0) // empty queue
 +        return;
 +    __sync_bool_compare_and_swap(ptr, 0, 1);
 +
@@ -1133,10 +1132,10 @@ index 0000000..1878145
 \ No newline at end of file
 diff --git a/user/thread_mutex.c b/user/thread_mutex.c
 new file mode 100644
-index 0000000..d2cfbc6
+index 0000000..9cadcfa
 --- /dev/null
 +++ b/user/thread_mutex.c
-@@ -0,0 +1,51 @@
+@@ -0,0 +1,53 @@
 +#include "kernel/types.h"
 +#include "user/user.h"
 +#include "user/thread_mutex.h"
@@ -1156,6 +1155,8 @@ index 0000000..d2cfbc6
 +  //   a5 = 1
 +  //   s1 = &lk->locked
 +  //   amoswap.w.aq a5, a5, (s1)
++  // The function returns the initial value of the variable that 
++  // the first pointer points to.
 +  while(__sync_lock_test_and_set(&lk->locked, 1) != 0) {
 +    yield();
 +  }
@@ -1338,10 +1339,10 @@ index 0000000..ef4c75f
 \ No newline at end of file
 diff --git a/user/threads.c b/user/threads.c
 new file mode 100644
-index 0000000..89f2143
+index 0000000..68c37ff
 --- /dev/null
 +++ b/user/threads.c
-@@ -0,0 +1,81 @@
+@@ -0,0 +1,85 @@
 +#include "kernel/types.h"
 +#include "kernel/stat.h"
 +#include "user/user.h"
@@ -1357,6 +1358,7 @@ index 0000000..89f2143
 +volatile int total_balance = 0;
 +struct thread_spinlock lock;
 +struct thread_mutex mlock;
++struct thread_mutex print_mutex;
 +
 +volatile unsigned int delay(unsigned int d)
 +{
@@ -1376,7 +1378,9 @@ index 0000000..89f2143
 +    int old;
 +
 +    struct balance *b = (struct balance *)arg;
++    thread_mutex_lock(&print_mutex);
 +    printf("Starting do_work: s:%s\n", b->name);
++    thread_mutex_unlock(&print_mutex);
 +
 +    for (i = 0; i < b->amount; i++)
 +    {
@@ -1402,6 +1406,7 @@ index 0000000..89f2143
 +{
 +    thread_spin_init(&lock);
 +    thread_mutex_init(&mlock);
++    thread_mutex_init(&print_mutex);
 +    struct balance b1 = {"b1", 3200};
 +    struct balance b2 = {"b2", 2800};
 +
